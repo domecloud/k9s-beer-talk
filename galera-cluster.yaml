@@ -1,0 +1,186 @@
+# A headless service to create DNS records
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+  name: galera-db
+  labels:
+    app: mysql-db
+spec:
+  ports:
+  - port: 3306
+    name: mysql-db
+  # *.galear.default.svc.cluster.local
+  clusterIP: None
+  selector:
+    app: mysql-db
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-db
+type: Opaque
+data:
+  # Root password (base64): 123456 # echo -n '123456' | base64
+  password: MTIzNDU2
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config-voldb
+data:
+  galera.cnf: |
+    [mysqld]
+    user = mysql
+    bind-address = 0.0.0.0
+    wsrep_provider = /usr/lib/galera/libgalera_smm.so
+    # TODO: is rsync the best option?
+    wsrep_sst_method = rsync
+    default_storage_engine = innodb
+    binlog_format = ROW
+    innodb_autoinc_lock_mode = 2
+    innodb_file_per_table
+    max_connections = 2500
+    key-buffer-size                = 32M
+    max-allowed-packet             = 16M
+    max-connect-errors             = 1000000
+    tmp-table-size                 = 32M
+    max-heap-table-size            = 32M
+    query-cache-type               = 1
+    query-cache-size               = 1000M
+    thread-cache-size              = 50
+    open-files-limit               = 65535
+    table-definition-cache         = 4096
+    table-open-cache               = 50
+    innodb-flush-method            = O_DIRECT
+    innodb-log-files-in-group      = 2
+    innodb-log-file-size           = 256M
+    innodb-flush-log-at-trx-commit = 1
+    innodb-file-per-table          = 1
+    innodb-buffer-pool-size        = 1G
+
+    # By default every node is standalone
+    wsrep_cluster_address=gcomm://
+    wsrep_cluster_name=galera
+    wsrep_node_address=127.0.0.1
+
+    # TODO: Enable use privileges. This doesn't work
+    # on mysql restart, for some reason after the SST
+    # permissions are not setup correctly.
+
+  mariadb.cnf: |
+    [client]
+    default-character-set = utf8
+    [mysqld]
+    character-set-server  = utf8
+    collation-server      = utf8_general_ci
+    # InnoDB tuning
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-db
+spec:
+  serviceName: "galera-db"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mysql-db
+  template:
+    metadata:
+      labels:
+        app: mysql-db
+    spec:
+      nodeSelector:  # kubectl label nodes kube-2 nodedb=mysql
+        nodedb: mysql # kubectl get nodes --show-labels
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: "app"
+                    operator: In
+                    values:
+                    - mysql-db
+              topologyKey: "kubernetes.io/hostname"
+      initContainers:
+      - name: install
+        image: dome/galera-install
+        imagePullPolicy: Always
+        args:
+        - "--work-dir=/work-dir"
+        volumeMounts:
+        - name: workdir
+          mountPath: "/work-dir"
+        - name: config
+          mountPath: "/etc/mysql"
+        - name: tmp-config
+          mountPath: /tmp
+      - name: bootstrap
+        image: debian:jessie
+        command:
+        - "/work-dir/peer-finder"
+        args:
+        - -on-start="/work-dir/on-start.sh"
+        - "-service=galera-db"
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: workdir
+          mountPath: "/work-dir"
+        - name: config
+          mountPath: "/etc/mysql"
+      containers:
+      - name: mysql
+        image: k8s.gcr.io/mysql-galera:e2e
+        ports:
+        - containerPort: 3306
+          name: mysql
+        - containerPort: 4444
+          name: sst
+        - containerPort: 4567
+          name: replication
+        - containerPort: 4568
+          name: ist
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-db
+              key: password
+        args:
+        - --defaults-file=/etc/mysql/my-galera.cnf
+        - --user=root
+        readinessProbe:
+          exec:
+            command: ["bash", "-c", "mysql -uroot -p\"${MYSQL_ROOT_PASSWORD}\" -e 'show databases;'"]
+          initialDelaySeconds: 20
+          timeoutSeconds: 5
+          successThreshold: 2
+        volumeMounts:
+        - name: datadir
+          mountPath: /var/lib/
+        - name: config
+          mountPath: /etc/mysql
+      volumes:
+      - name: datadir
+        hostPath:
+          path: /data/galera
+          type: Directory
+      - name: config
+        emptyDir: {}
+      - name: workdir
+        emptyDir: {}
+      - name: tmp-config
+        configMap:
+          name: mysql-config-voldb
+          items:
+            - path: "my-galera.cnf"
+              key: galera.cnf
+            - path: "mariadb.cnf"
+              key: mariadb.cnf

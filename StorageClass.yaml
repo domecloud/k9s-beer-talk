@@ -1,0 +1,11 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"storage.k8s.io/v1beta1","kind":"StorageClass","metadata":{"annotations":{},"name":"example-nfs","namespace":""},"provisioner":"example.com/nfs"}
+  creationTimestamp: null
+  name: example-nfs
+  selfLink: /apis/storage.k8s.io/v1/storageclasses/example-nfs
+provisioner: example.com/nfs
+reclaimPolicy: Delete
