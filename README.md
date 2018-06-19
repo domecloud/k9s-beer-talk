@@ -1,6 +1,9 @@
 # k9s-beer-talk
 Kubeernetes Beer Talk Demo by [DomeCloud](https://dome.cloud)
 
+Video on Facebook [LiveTube / Live! Kubeernetes
+](https://www.facebook.com/livetubethailand/videos/2061413037459464/)
+
 ---
 ## NFS Dynamic Provisioning
 
