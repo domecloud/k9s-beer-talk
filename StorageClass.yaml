@@ -17,4 +17,6 @@ metadata:
   name: example-nfs
   selfLink: /apis/storage.k8s.io/v1/storageclasses/example-nfs
 provisioner: example.com/nfs
-reclaimPolicy: Delete
+reclaimPolicy: Retain
+parameters:
+  mountOptions: "vers=4.1"
